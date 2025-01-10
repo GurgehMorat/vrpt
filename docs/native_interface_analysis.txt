@@ -1,0 +1,243 @@
+========================================
+LevelUpMenu Native Interface Analysis
+========================================
+
+Core Interface Architecture
+-------------------------
+The native (C++) side of the LevelUpMenu system serves as both the implementation layer for game mechanics and the bridge to the game's core systems. This interface is primarily structured around the BGSCodeObj pattern that Bethesda uses for Scaleform-to-Native communication.
+
+Menu Registration System
+-----------------------
+The menu registration process is crucial and specific:
+
+1. Registration Flow
+   ```cpp
+   // Menu must be unregistered first if it exists
+   BSFixedString menuName("LevelUpMenu");
+   if ((*g_ui)->IsMenuRegistered(menuName)) {
+       (*g_ui)->UnregisterMenu(menuName, true);
+   }
+   
+   // Register our implementation
+   (*g_ui)->Register("LevelUpMenu", VRLevelUpMenu::Create);
+   ```
+
+2. Menu Creation Chain
+   - UI system requests menu creation
+   - Static Create() method invoked
+   - Constructor sets up initial state
+   - Movie loading and initialization
+   - BGSCodeObj setup and registration
+
+Scaleform Integration
+-------------------
+The Scaleform integration layer manages all UI-related functionality:
+
+1. Movie Loading
+   ```cpp
+   // Load the vanilla movie file
+   CALL_MEMBER_FN(*g_scaleformManager, LoadMovie)(
+       this,           // IMenu instance
+       movie,          // GFxMovieView pointer
+       menuName.c_str(), // "LevelUpMenu"
+       "root1",        // Root path
+       0               // Flags
+   );
+   ```
+
+2. Function Registration
+   Each callback must be properly registered with Scaleform:
+   ```cpp
+   // Example registration pattern
+   RegisterFunction<PlaySoundHandler>(&codeObj, movie->movieRoot, "PlaySound");
+   RegisterFunction<GetXPInfoHandler>(&codeObj, movie->movieRoot, "GetXPInfo");
+   ```
+
+3. Value Handling
+   Careful type management between Scaleform and native code:
+   ```cpp
+   // String handling
+   const char* str = args->args[0].GetString();
+   
+   // Number handling
+   int value = args->args[1].GetInt();
+   
+   // Object creation
+   GFxValue obj;
+   args->movie->movieRoot->CreateObject(&obj);
+   
+   // Property setting
+   obj.SetMember("property", &GFxValue(value));
+   ```
+
+Required Interface Functions
+-------------------------
+Complete implementation requirements for BGSCodeObj:
+
+1. Sound System Interface
+   ```cpp
+   void PlaySoundHandler::Invoke(Args* args) {
+       if (args->numArgs > 0 && args->args[0].GetType() == GFxValue::kType_String) {
+           const char* soundID = args->args[0].GetString();
+           // Sound system integration point
+           // Must handle: UIMenuOK, UIMenuCancel, UIMenuFocus, etc.
+       }
+   }
+
+   void PlayPerkSoundHandler::Invoke(Args* args) {
+       if (args->numArgs > 0 && args->args[0].GetType() == GFxValue::kType_String) {
+           const char* clipName = args->args[0].GetString();
+           // Perk-specific sound handling
+           // Must handle animation-synchronized sounds
+       }
+   }
+   ```
+
+2. Game Data Interface
+   ```cpp
+   void GetXPInfoHandler::Invoke(Args* args) {
+       if (args->numArgs > 0 && args->args[0].IsObject()) {
+           GFxValue* dataObj = &args->args[0];
+           // Must provide:
+           dataObj->SetMember("level", &GFxValue(playerLevel));
+           dataObj->SetMember("currXP", &GFxValue(currentXP));
+           dataObj->SetMember("maxXP", &GFxValue(requiredXP));
+       }
+   }
+
+   void GetPerkInfoHandler::Invoke(Args* args) {
+       if (args->numArgs > 1) {
+           const char* perkName = args->args[0].GetString();
+           int rank = args->args[1].GetInt();
+           // Must return:
+           // "Requirements:\n<req_text>\n\nRank N: <description>"
+           const char* info = GetPerkDescription(perkName, rank);
+           args->movie->movieRoot->CreateString(args->result, info);
+       }
+   }
+   ```
+
+3. Game State Management
+   ```cpp
+   void SelectPerkHandler::Invoke(Args* args) {
+       if (args->numArgs > 1) {
+           const char* perkName = args->args[0].GetString();
+           int rank = args->args[1].GetInt();
+           // Must:
+           // 1. Validate selection
+           // 2. Apply perk to player
+           // 3. Update game state
+           // 4. Handle any consequences
+       }
+   }
+   ```
+
+Memory and Resource Management
+---------------------------
+Critical aspects of resource handling:
+
+1. Object Lifecycle
+   ```cpp
+   // Creation
+   GFxValue obj;
+   movie->movieRoot->CreateObject(&obj);
+   
+   // Managed references
+   obj.AddManaged();  // Prevent GC
+   
+   // Cleanup
+   obj.CleanManaged();
+   ```
+
+2. Event Management
+   ```cpp
+   // Registration
+   RegisterFunction<CallbackHandler>(&obj, root, "callback");
+   
+   // Handler cleanup
+   virtual ~MenuHandler() {
+       // Clean up any remaining callbacks
+       // Remove event sinks
+   }
+   ```
+
+VR-Specific Considerations
+------------------------
+Special handling required for VR implementation:
+
+1. Scene Validation
+   ```cpp
+   bool IsVRSceneReady() {
+       // Must check:
+       if (!g_playerCamera || !*g_playerCamera) return false;
+       if (!(*g_playerCamera)->cameraState) return false;
+       if (!(*g_playerCamera)->cameraNode) return false;
+       
+       // Get position for menu placement
+       NiPoint3 pos;
+       (*g_playerCamera)->cameraState->GetPosition(&pos);
+       return true;
+   }
+   ```
+
+2. VR Input Translation
+   ```cpp
+   virtual void OnButtonEvent(ButtonEvent* evt) {
+       // Must handle:
+       // - VR controller input
+       // - Position tracking
+       // - Trigger states
+       // - Haptic feedback
+   }
+   ```
+
+3. Menu Positioning
+   ```cpp
+   void PositionMenuInVR() {
+       // Calculate comfortable viewing position
+       // Handle head tracking
+       // Maintain proper scale
+       // Consider depth and FOV
+   }
+   ```
+
+Error Handling and Logging
+------------------------
+Comprehensive error tracking system:
+
+1. Initialization Checks
+   ```cpp
+   void SetupBGSCodeObj() {
+       _MESSAGE("\n=== Setting up BGSCodeObj ===");
+       
+       if (!movie || !movie->movieRoot) {
+           _ERROR("Invalid movie state during BGSCodeObj setup");
+           return;
+       }
+       
+       // Log all major steps
+       _MESSAGE("Created BGSCodeObj");
+       _MESSAGE("Registered callbacks");
+       _MESSAGE("Setup complete");
+   }
+   ```
+
+2. Runtime Validation
+   ```cpp
+   void ValidateMenuState() {
+       // Check menu flags
+       // Verify movie state
+       // Validate callbacks
+       // Check resource availability
+   }
+   ```
+
+3. Error Recovery
+   ```cpp
+   void RecoverFromError() {
+       // Clean up current state
+       // Re-initialize if possible
+       // Fall back to safe state
+       // Log recovery attempt
+   }
+   ```

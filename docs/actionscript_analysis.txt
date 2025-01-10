@@ -1,0 +1,230 @@
+=====================================
+LevelUpMenu ActionScript System Analysis
+=====================================
+
+Core Class Structure
+------------------
+The ActionScript implementation centers around two primary classes:
+
+1. LevelUpMenu Class
+   - Inherits from IMenu for base menu functionality
+   - Manages the overall menu state and layout
+   - Handles the bridge between UI and game systems
+   - Core Properties:
+     * GridView_mc: Main perk grid instance
+     * PerkInfo_mc: Information panel
+     * XPMeterHolder_mc: Level progress display
+     * ButtonHintBar_mc: Control scheme display
+     * BGSCodeObj: Native code interface
+     * Various state tracking variables
+
+2. PerkGrid Class
+   - Handles the actual perk grid visualization
+   - Manages perk selection and navigation
+   - Controls visual states and animations
+   - Key Components:
+     * Background_mc: Grid background
+     * PerksHolder_mc: Container for perk entries
+     * Header_mc: SPECIAL attribute headers
+     * Overlay_mc: Visual effects layer
+     * SelectionRect_mc: Current selection indicator
+
+Initialization Flow
+-----------------
+The menu's initialization sequence is critical:
+
+1. Constructor Phase
+   ```actionscript
+   public function LevelUpMenu() {
+       // Button setup
+       AcceptButton = new BSButtonHintData("$ACCEPT","`","","","OCR_Trig","MR_Trig","",1,onAcceptPressed);
+       CancelButton = new BSButtonHintData("$CLOSE","b","","","OCR_Grab","MR_Grab","",1,onCancelPressed);
+       
+       // Initial state
+       BGSCodeObj = new Object();
+       GridView_mc.visible = false;
+       bConfirming = false;
+       
+       // Event registration
+       GridView_mc.addEventListener(PerkGrid.SELECTION_CHANGE, onGridSelectionChange);
+       GridView_mc.addEventListener(PerkGrid.ZOOMING, onGridZoom);
+   }
+   ```
+
+2. Code Object Setup
+   ```actionscript
+   public function onCodeObjCreate() : * {
+       GridView_mc.codeObj = BGSCodeObj;
+       BGSCodeObj.RegisterPerkGridComponents(GridView_mc);
+       
+       // Get initial XP info
+       var xpInfo:Object = new Object();
+       BGSCodeObj.GetXPInfo(xpInfo);
+       
+       // Configure XP meter
+       XPMeterHolder_mc.Meter_mc.SetMeter(xpInfo.currXP, 0, xpInfo.maxXP);
+       
+       // Start texture loading
+       GridView_mc.InvalidateGrid();
+       GridView_mc.addEventListener(PerkGrid.TEXTURES_LOADED, onGridTexturesLoaded);
+   }
+   ```
+
+Event System
+-----------
+Complex event system managing all interactions:
+
+1. Input Events
+   ```actionscript
+   public function ProcessUserEvent(param1:String, param2:Boolean) : Boolean {
+       // Grid gets first chance at input
+       var handled:Boolean = GridView_mc.ProcessUserEvent(param1, param2);
+       
+       if(!handled) {
+           if(!param2) {  // On button up
+               switch(param1) {
+                   case "Cancel":
+                       handled = onCancelPressed();
+                       break;
+                   case "Accept":
+                       handled = onAcceptPressed();
+                       break;
+               }
+           }
+       }
+       return handled;
+   }
+   ```
+
+2. Selection Events
+   ```actionscript
+   private function onGridSelectionChange() : * {
+       if(GridView_mc.selectedPerkEntry != null) {
+           // Update sound
+           if(GridView_mc.selectedPerkEntry.owned) {
+               BGSCodeObj.PlayPerkSound(GridView_mc.selectedPerkEntry.clipName);
+           }
+           
+           // Update description
+           _SelectionDesc = GridView_mc.selectedPerkEntry.description;
+           
+           // Update visual state
+           UpdateSelectionText();
+           SetButtons();
+       }
+   }
+   ```
+
+Native Code Integration
+---------------------
+Critical interface points with C++:
+
+1. Required Functions
+   The ActionScript expects these functions to be available through BGSCodeObj:
+   ```actionscript
+   // Sound System
+   BGSCodeObj.PlaySound(soundID:String)           // UI feedback
+   BGSCodeObj.PlayPerkSound(clipName:String)      // Perk-specific audio
+   BGSCodeObj.StopPerkSound()                     // Stop current perk sound
+   
+   // Data Access
+   BGSCodeObj.GetXPInfo(infoObj:Object)          // Player level data
+   BGSCodeObj.GetPerkInfoByRank(name:String, rank:int) // Perk details
+   
+   // Game State
+   BGSCodeObj.SelectPerk(clipName:String, rank:int)    // Select perk
+   BGSCodeObj.RegisterPerkGridComponents(grid:Object)   // Grid setup
+   BGSCodeObj.onGridAddedToStage()               // Post-setup
+   
+   // Menu Control
+   BGSCodeObj.CloseMenu()                        // Close menu
+   BGSCodeObj.OnVRConfimationStart(state:Boolean) // VR confirmation
+   ```
+
+2. Data Structures
+   Objects passed between systems:
+   ```actionscript
+   // XP Info Object
+   {
+       level: int,      // Current player level
+       currXP: Number,  // Current XP amount
+       maxXP: Number    // XP needed for next level
+   }
+   
+   // Perk Entry Object
+   {
+       clipName: String,    // Internal perk ID
+       text: String,        // Display name
+       description: String, // Full description
+       rank: int,          // Current rank
+       maxRank: int,       // Maximum rank
+       available: Boolean,  // Can be selected
+       owned: Boolean      // Already acquired
+   }
+   ```
+
+Visual State Management
+---------------------
+Complex system for managing visual feedback:
+
+1. Selection States
+   ```actionscript
+   private function RefreshStarStates(currentRank:uint, maxRank:uint, available:Boolean) : * {
+       for(var i:uint = 0; i < maxRank; i++) {
+           var star:MovieClip = StarHolder_mc.getChildAt(i);
+           var isAvailable:Boolean = available && currentRank == i && uiPerkCount > 0;
+           var isFilled:Boolean = i < currentRank;
+           
+           if(isAvailable) star.gotoAndStop("Available");
+           else if(isFilled) star.gotoAndStop("Full");
+           else star.gotoAndStop("Empty");
+       }
+   }
+   ```
+
+2. Animation Control
+   ```actionscript
+   private function SetVaultBoyAnimating(clip:MovieClip, shouldPlay:Boolean) : * {
+       if(shouldPlay) {
+           clip.gotoAndPlay(1);
+           clip.loop = true;
+       } else {
+           clip.gotoAndStop(1);
+           clip.loop = false;
+       }
+   }
+   ```
+
+Resource Management
+-----------------
+Careful handling of game resources:
+
+1. Texture Loading
+   ```actionscript
+   private function onTexturesLoaded() : * {
+       removeEventListener(TEXTURES_LOADED, onTexturesLoaded);
+       platform = uiPlatform;  // Set platform-specific adjustments
+       visible = true;         // Show grid after textures ready
+       
+       // Give focus to grid
+       stage.focus = this;
+       
+       // Notify native code
+       BGSCodeObj.onGridAddedToStage();
+   }
+   ```
+
+2. Memory Management
+   ```actionscript
+   public function InvalidateGrid() : * {
+       // Clear existing entries
+       while(PerksHolder_mc.numChildren > 0) {
+           var clip:MovieClip = PerksHolder_mc.getChildAt(0);
+           clip.removeEventListener(Event.ENTER_FRAME, onPerkAnimation);
+           PerksHolder_mc.removeChildAt(0);
+       }
+       
+       // Rebuild grid
+       PopulateGrid();
+   }
+   ```
